@@ -11,6 +11,7 @@ class User(Base):
     username = Column(String, unique=True, index=True)
     hashed_password = Column(String)
     is_active = Column(Boolean, default=True)
+    email_verified = Column(Boolean,default=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     
     conversations = relationship("Conversation", back_populates="user")
@@ -49,4 +50,14 @@ class PasswordResetToken(Base):
     token = Column(String,unique = True,index = True)
     expires_at = Column(DateTime)
     used = Column(Boolean,default=False)
+
+class EmailVerificationToken(Base):
+    __tablename__ = "email_verification_tokens"
+    
+    id = Column(Integer,primary_key=True,index=True)
+    email=Column(String,index=True)
+    code = Column(String,index=True)
+    expires_at = Column(DateTime)
+    used = Column(Boolean,default = False)
+    created_at = Column(DateTime,default=datetime.datetime.utcnow)
     

@@ -25,6 +25,7 @@
                             <div class="mb-3">
                                 <label for="email" class="form-label">Email</label>
                                 <input type="email" class="form-control" id="email" name="email" required>
+                                <div class="form-text">We'll send a verification code to this email.</div>
                             </div>
                             <div class="mb-3">
                                 <label for="username" class="form-label">Username</label>
@@ -36,14 +37,13 @@
                                 <input type="password" class="form-control" id="password" name="password" required>
                                 <div class="form-text">Password must be at least 8 characters long.</div>
                             </div>
-                            <!-- ADD THIS CONFIRM PASSWORD FIELD -->
                             <div class="mb-3">
                                 <label for="confirm_password" class="form-label">Confirm Password</label>
                                 <input type="password" class="form-control" id="confirm_password" name="confirm_password" required>
                                 <div class="form-text">Please confirm your password.</div>
                             </div>
                             <div class="d-grid gap-2">
-                                <button type="submit" class="btn btn-primary btn-lg">Register</button>
+                                <button type="submit" class="btn btn-primary btn-lg" id="registerBtn">Register</button>
                             </div>
                         </form>
                         
@@ -74,11 +74,16 @@
             e.preventDefault();
             hideError();
 
+            const registerBtn = document.getElementById('registerBtn');
+            const originalText = registerBtn.textContent;
+            registerBtn.textContent = 'Registering...';
+            registerBtn.disabled = true;
+
             const formData = {
                 email: document.getElementById('email').value,
                 username: document.getElementById('username').value,
                 password: document.getElementById('password').value,
-                confirm_password: document.getElementById('confirm_password').value  // ADD THIS LINE
+                confirm_password: document.getElementById('confirm_password').value
             };
 
             try {
@@ -90,31 +95,33 @@
                     body: JSON.stringify(formData)
                 });
                 
+                const result = await response.json();
+                
                 if (response.ok) {
-                    const result = await response.json();
-                    // Show success message briefly before redirect
-                    alert('Registration successful!');
-                    window.location.href = '/login';
+                    // Registration successful, redirect to verification page
+                    window.location.href = result.redirect_url;
                 } else {
-                    const error = await response.json();
                     // Handle different types of errors
-                    if (error.details) {
+                    if (result.details) {
                         // Validation errors
-                        const errorMessages = error.details.map(detail => detail.msg).join(', ');
+                        const errorMessages = result.details.map(detail => detail.msg).join(', ');
                         showError(`Validation Error: ${errorMessages}`);
-                    } else if (error.detail) {
+                    } else if (result.detail) {
                         // Business logic errors (email exists, etc.)
-                        showError(error.detail);
+                        showError(result.detail);
                     } else {
                         showError('Registration failed. Please try again.');
                     }
                 }
             } catch (error) {
                 showError('Network error: ' + error.message);
-            }  
+            } finally {
+                registerBtn.textContent = originalText;
+                registerBtn.disabled = false;
+            }
         };
 
-        // Optional: Add real-time password matching validation
+        // Real-time password matching validation
         document.getElementById('confirm_password').addEventListener('input', function() {
             const password = document.getElementById('password').value;
             const confirmPassword = this.value;
@@ -125,132 +132,16 @@
                 this.setCustomValidity('');
             }
         });
-    </script>
-</body>
-</html><!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Register - AI Legal Assistant</title>
-    <link rel="stylesheet" href="{{ url_for('static', path='/css/styles.css') }}">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
-</head>
-<body class="bg-light">
-    <div class="container">
-        <div class="row justify-content-center mt-5">
-            <div class="col-md-6 col-lg-5">
-                <div class="card shadow-sm">
-                    <div class="card-body p-4">
-                        <div class="text-center mb-4">
-                            <h1 class="h3">Create an Account</h1>
-                            <p class="text-muted">Fill in the details to register</p>
-                        </div>
-                        
-                        <!-- Error display area -->
-                        <div id="errorAlert" class="alert alert-danger d-none" role="alert"></div>
-                        
-                        <form id="registerForm">
-                            <div class="mb-3">
-                                <label for="email" class="form-label">Email</label>
-                                <input type="email" class="form-control" id="email" name="email" required>
-                            </div>
-                            <div class="mb-3">
-                                <label for="username" class="form-label">Username</label>
-                                <input type="text" class="form-control" id="username" name="username" required>
-                                <div class="form-text">Username must be 3-50 characters long.</div>
-                            </div>
-                            <div class="mb-3">
-                                <label for="password" class="form-label">Password</label>
-                                <input type="password" class="form-control" id="password" name="password" required>
-                                <div class="form-text">Password must be at least 8 characters long.</div>
-                            </div>
-                            <!-- ADD THIS CONFIRM PASSWORD FIELD -->
-                            <div class="mb-3">
-                                <label for="confirm_password" class="form-label">Confirm Password</label>
-                                <input type="password" class="form-control" id="confirm_password" name="confirm_password" required>
-                                <div class="form-text">Please confirm your password.</div>
-                            </div>
-                            <div class="d-grid gap-2">
-                                <button type="submit" class="btn btn-primary btn-lg">Register</button>
-                            </div>
-                        </form>
-                        
-                        <div class="text-center mt-4">
-                            <p>Already have an account? <a href="/login">Login</a></p>
-                            <p><a href="/">← Back to home</a></p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
-    <script>
-        function showError(message) {
-            const errorAlert = document.getElementById('errorAlert');
-            errorAlert.textContent = message;
-            errorAlert.classList.remove('d-none');
-        }
-
-        function hideError() {
-            const errorAlert = document.getElementById('errorAlert');
-            errorAlert.classList.add('d-none');
-        }
-
-        document.getElementById('registerForm').onsubmit = async function(e) {
-            e.preventDefault();
-            hideError();
-
-            const formData = {
-                email: document.getElementById('email').value,
-                username: document.getElementById('username').value,
-                password: document.getElementById('password').value,
-                confirm_password: document.getElementById('confirm_password').value  // ADD THIS LINE
-            };
-
-            try {
-                const response = await fetch('/register', {
-                    method: 'POST',
-                    headers: {
-                        "Content-Type": 'application/json',
-                    },
-                    body: JSON.stringify(formData)
-                });
-                
-                if (response.ok) {
-                    const result = await response.json();
-           
-                    window.location.href = '/login';
-                } else {
-                    const error = await response.json();
-                    // Handle different types of errors
-                    if (error.details) {
-                        // Validation errors
-                        const errorMessages = error.details.map(detail => detail.msg).join(', ');
-                        showError(`Validation Error: ${errorMessages}`);
-                    } else if (error.detail) {
-                        // Business logic errors (email exists, etc.)
-                        showError(error.detail);
-                    } else {
-                        showError('Registration failed. Please try again.');
-                    }
-                }
-            } catch (error) {
-                showError('Network error: ' + error.message);
-            }  
-        };
-
-        // Optional: Add real-time password matching validation
-        document.getElementById('confirm_password').addEventListener('input', function() {
-            const password = document.getElementById('password').value;
-            const confirmPassword = this.value;
+        // Also check when password field changes
+        document.getElementById('password').addEventListener('input', function() {
+            const confirmPassword = document.getElementById('confirm_password').value;
+            const confirmPasswordField = document.getElementById('confirm_password');
             
-            if (confirmPassword && password !== confirmPassword) {
-                this.setCustomValidity('Passwords do not match');
+            if (confirmPassword && this.value !== confirmPassword) {
+                confirmPasswordField.setCustomValidity('Passwords do not match');
             } else {
-                this.setCustomValidity('');
+                confirmPasswordField.setCustomValidity('');
             }
         });
     </script>
