@@ -6,7 +6,7 @@ from datetime import timedelta
 from fastapi.responses import RedirectResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from typing import Annotated
-from pydantic import BaseModel,EmailStr,SecretStr
+from pydantic import BaseModel,EmailStr,Field,model_validator
 
 from database import get_db
 from models.models import User
@@ -19,7 +19,17 @@ templates = Jinja2Templates(directory="templates")
 
 class ResetPasswordRequest(BaseModel):
     token: str
-    new_password: str
+    new_password: str = Field(..., min_length=8)
+    confirm_password: str = Field(..., min_length=8)  
+    
+    @model_validator(mode="before")
+    @classmethod
+    def confirm_pass(cls, values):  
+        password = values.get('new_password')
+        confirm_password = values.get('confirm_password')  
+        if password and confirm_password and password != confirm_password:
+            raise ValueError("Passwords do not match")
+        return values
     
 @router.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
@@ -31,8 +41,21 @@ async def register_page(request: Request):
 
 class RegisterRequest(BaseModel):
     email:EmailStr
-    username:str
-    password:str
+    username:str = Field(...,min_length=3,max_length=50)
+    password:str = Field(...,min_length=8)
+    confirm_password:str = Field(...,min_length=8)
+    
+    @model_validator(mode="before")
+    @classmethod
+    def passwords_match(cls,values):
+        password = values.get('password')
+        confirm_password = values.get('confirm_password')
+        if password and confirm_password and password!=confirm_password:
+            raise ValueError("Passwords do not match")
+        return values
+    
+    
+    
     
 @router.post("/register")
 async def register(
@@ -91,7 +114,7 @@ async def login_for_access_token(
 
 class LoginRequest(BaseModel):
     email:EmailStr
-    password:str
+    password:str = Field(...,min_length=8)
 @router.post("/login")
 async def login(
     login_data: LoginRequest,
@@ -141,7 +164,6 @@ class ForgotPasswordRequest(BaseModel):
     
 @router.post("/forgot-password")
 async def forgot_password(
-    # email:Annotated[str,Form()],
     forgot_password_data:ForgotPasswordRequest,
     bg:BackgroundTasks,
     db:Session = Depends(get_db)
