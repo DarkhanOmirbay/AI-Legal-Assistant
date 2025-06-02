@@ -9,11 +9,17 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String, unique=True, index=True)
     username = Column(String, unique=True, index=True)
-    hashed_password = Column(String)
+    hashed_password = Column(String,nullable=True)
     is_active = Column(Boolean, default=True)
     email_verified = Column(Boolean,default=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     
+    google_id = Column(String,unique = True,nullable=True,index=True)
+    oauth_provider = Column(String,nullable=True)
+    avatar_url = Column(String,nullable=True)
+    full_name=Column(String,nullable=True)
+    
+
     conversations = relationship("Conversation", back_populates="user")
 
 class Conversation(Base):

@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 import os
 
 from database import engine, Base, get_db
-from routers import auth, chat
+from routers import auth, chat,oauth
 from models import models
 
 Base.metadata.create_all(bind=engine)
@@ -21,6 +21,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 app.include_router(auth.router)
 app.include_router(chat.router)
+app.include_router(oauth.oauth_router)
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request, exc):
