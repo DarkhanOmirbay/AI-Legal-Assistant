@@ -77,15 +77,22 @@ class DifyService:
 
     async def create_new_conversation(self, name: str, user_id: str) -> Dict[str, Any]:
         """
-        Create a new conversation
+        Create a new conversation - НЕ вызываем Dify API сразу для скорости
+        Conversation в Dify будет создан при первом сообщении
         """
-   
-        return await self.send_message("Hello", user_id)
+        return {
+            "conversation_id": None,  # Будет создан при первом сообщении
+            "name": name
+        }
     
     async def rename_conversation(self, conversation_id: str, user_id: str, name: str = None) -> Dict[str, Any]:
         """
         Rename a conversation
         """
+        if not conversation_id:
+            # Если conversation_id еще нет (чат без сообщений), просто возвращаем успех
+            return {"success": True}
+            
         url = f"{self.base_url}/conversations/{conversation_id}/name"
         
         payload = {
@@ -108,6 +115,10 @@ class DifyService:
         """
         Delete a conversation
         """
+        if not conversation_id:
+            # Если conversation_id еще нет, просто возвращаем успех
+            return {"success": True}
+            
         url = f"{self.base_url}/conversations/{conversation_id}"
         
         payload = {

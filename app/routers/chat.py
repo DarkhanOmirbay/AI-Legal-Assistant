@@ -26,17 +26,17 @@ def safe_isoformat(dt):
         return datetime.datetime.utcnow().isoformat()
     return dt.isoformat()
 
-@router.post("/new")  # ✅ БЕЗ /chat/ префикса
+@router.post("/new")
 async def create_new_chat(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     try:
         print(f"Creating new chat for user: {current_user.username}")
-        result = await dify_service.create_new_conversation("New Chat", current_user.username)
+        
         
         conversation = Conversation(
-            dify_conversation_id=result["conversation_id"],
+            dify_conversation_id=None,  # Будет создан при первом сообщении
             name="New Chat",
             user_id=current_user.id
         )
@@ -56,7 +56,7 @@ async def create_new_chat(
         print(f"Error creating chat: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/message")  # ✅ БЕЗ /chat/ префикса
+@router.post("/message")
 async def send_message(
     message_data: MessageRequest,
     current_user: User = Depends(get_current_user),
@@ -64,17 +64,14 @@ async def send_message(
 ):
     try:
         print(f"Sending message for user: {current_user.username}")
-        # If no conversation_id provided, create a new conversation
+        
+        # Если conversation_id не указан, создаем новую беседу
         if not message_data.conversation_id:
-            # Create new conversation
-            result = await dify_service.create_new_conversation("New Chat", current_user.username)
-            
             conversation = Conversation(
-                dify_conversation_id=result["conversation_id"],
+                dify_conversation_id=None,  # Будет создан ниже
                 name="New Chat",
                 user_id=current_user.id
             )
-            
             db.add(conversation)
             db.commit()
             db.refresh(conversation)
@@ -86,11 +83,25 @@ async def send_message(
             if not conversation:
                 raise HTTPException(status_code=404, detail="Conversation not found")
         
-        result = await dify_service.send_message(
-            query=message_data.message,
-            user_id=current_user.username,
-            conversation_id=conversation.dify_conversation_id
-        )
+        # Если у беседы нет dify_conversation_id, создаем его сейчас
+        if not conversation.dify_conversation_id:
+            print(f"Creating new Dify conversation for first message")
+            # Первое сообщение - создаем conversation в Dify
+            result = await dify_service.send_message(
+                query=message_data.message,
+                user_id=current_user.username,
+                conversation_id=None  # Новая беседа в Dify
+            )
+            # Сохраняем conversation_id от Dify
+            conversation.dify_conversation_id = result["conversation_id"]
+        else:
+            print(f"Sending message to existing Dify conversation: {conversation.dify_conversation_id}")
+            # Обычное сообщение в существующую беседу
+            result = await dify_service.send_message(
+                query=message_data.message,
+                user_id=current_user.username,
+                conversation_id=conversation.dify_conversation_id
+            )
         
         new_message = Message(
             dify_message_id=result["message_id"],
@@ -101,14 +112,20 @@ async def send_message(
         
         db.add(new_message)
         
-        # Fix: Handle None updated_at
+        # Обновляем время последнего обновления беседы
         if new_message.created_at:
             conversation.updated_at = new_message.created_at
         else:
             conversation.updated_at = datetime.datetime.utcnow()
             
-        if conversation.name == "New Chat" and len(message_data.message) < 30:
-            conversation.name = message_data.message
+        # Автоматически переименовываем чат на основе первого сообщения
+        if conversation.name == "New Chat" and len(message_data.message.strip()) > 0:
+            # Берем первые 30 символов сообщения как название
+            new_name = message_data.message.strip()[:30]
+            if len(message_data.message.strip()) > 30:
+                new_name += "..."
+            conversation.name = new_name
+            print(f"Auto-renamed conversation to: {new_name}")
         
         db.commit()
         
@@ -123,7 +140,7 @@ async def send_message(
         print(f"Error sending message: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
         
-@router.get("/conversations")  # ✅ БЕЗ /chat/ префикса
+@router.get("/conversations")
 async def get_conversations(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -136,7 +153,6 @@ async def get_conversations(
         
         result = []
         for conversation in conversations:
-            # Fix: Handle None datetime values
             result.append({
                 "id": conversation.id,
                 "name": conversation.name,
@@ -150,7 +166,7 @@ async def get_conversations(
         print(f"Error loading conversations: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/history/{conversation_id}")  # ✅ БЕЗ /chat/ префикса
+@router.get("/history/{conversation_id}")
 async def get_chat_history(
     conversation_id: int,
     current_user: User = Depends(get_current_user),
@@ -208,10 +224,21 @@ async def delete_conversation(
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
         
-        # Delete messages first
+        # Удаляем беседу из Dify если она там есть
+        if conversation.dify_conversation_id:
+            try:
+                await dify_service.delete_conversation(
+                    conversation.dify_conversation_id, 
+                    current_user.username
+                )
+            except Exception as e:
+                print(f"Warning: Failed to delete from Dify: {str(e)}")
+                # Не прерываем процесс, если не удалось удалить из Dify
+        
+        # Удаляем сообщения сначала
         db.query(Message).filter(Message.conversation_id == conversation.id).delete()
         
-        # Delete conversation
+        # Удаляем беседу
         db.delete(conversation)
         db.commit()
         
@@ -220,7 +247,7 @@ async def delete_conversation(
         print(f"Error deleting conversation: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.put("/conversations/{conversation_id}")  # ✅ БЕЗ /chat/ префикса
+@router.put("/conversations/{conversation_id}")
 async def rename_conversation(
     conversation_id: int,
     rename_data: RenameConversationRequest,
@@ -236,11 +263,17 @@ async def rename_conversation(
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
         
-        await dify_service.rename_conversation(
-            conversation.dify_conversation_id, 
-            current_user.username, 
-            rename_data.name
-        )
+        # Переименовываем в Dify если беседа там есть
+        if conversation.dify_conversation_id:
+            try:
+                await dify_service.rename_conversation(
+                    conversation.dify_conversation_id, 
+                    current_user.username, 
+                    rename_data.name
+                )
+            except Exception as e:
+                print(f"Warning: Failed to rename in Dify: {str(e)}")
+                # Продолжаем, даже если не удалось переименовать в Dify
         
         conversation.name = rename_data.name
         db.commit()
