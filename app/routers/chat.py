@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Form, Cookie
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
-from typing import Annotated, Optional, List, Dict
-import json
+from typing import Optional, List, Dict
+from pydantic import BaseModel
+import datetime
 
 from database import get_db
 from models.models import User, Conversation, Message
@@ -11,156 +11,156 @@ from services.auth_service import get_current_user
 from services.dify_service import DifyService
 
 router = APIRouter(tags=["chat"])
-templates = Jinja2Templates(directory="templates")
 dify_service = DifyService()
 
-@router.get("/chat", response_class=HTMLResponse)
-async def chat_page(
-    request: Request,
-    access_token: Optional[str] = Cookie(None),
-    db: Session = Depends(get_db)
-):
-    if not access_token:
-        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
-    
-    try:
-        token = access_token.replace("Bearer ", "")
-        user = await get_current_user(token=token, db=db)
-        
-        conversations = db.query(Conversation).filter(Conversation.user_id == user.id).order_by(Conversation.updated_at.desc()).all()
-        
-        return templates.TemplateResponse(
-            "chat.html", 
-            {
-                "request": request, 
-                "user": user, 
-                "conversations": conversations
-            }
-        )
-    except Exception as e:
-        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+class MessageRequest(BaseModel):
+    message: str
+    conversation_id: Optional[int] = None
 
-@router.post("/api/chat/new")
+class RenameConversationRequest(BaseModel):
+    name: str
+
+def safe_isoformat(dt):
+    """Safely convert datetime to ISO format, handling None values"""
+    if dt is None:
+        return datetime.datetime.utcnow().isoformat()
+    return dt.isoformat()
+
+@router.post("/new")  # ✅ БЕЗ /chat/ префикса
 async def create_new_chat(
-    access_token: Optional[str] = Cookie(None),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    if not access_token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    
     try:
-        token = access_token.replace("Bearer ", "")
-        user = await get_current_user(token=token, db=db)
-        
-        result = await dify_service.create_new_conversation("New Chat", user.username)
+        print(f"Creating new chat for user: {current_user.username}")
+        result = await dify_service.create_new_conversation("New Chat", current_user.username)
         
         conversation = Conversation(
             dify_conversation_id=result["conversation_id"],
             name="New Chat",
-            user_id=user.id
+            user_id=current_user.id
         )
         
         db.add(conversation)
         db.commit()
         db.refresh(conversation)
         
-        return {"conversation_id": conversation.id, "dify_conversation_id": conversation.dify_conversation_id}
+        return {
+            "id": conversation.id,
+            "name": conversation.name,
+            "dify_conversation_id": conversation.dify_conversation_id,
+            "created_at": safe_isoformat(conversation.created_at),
+            "updated_at": safe_isoformat(conversation.updated_at)
+        }
     except Exception as e:
+        print(f"Error creating chat: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/api/chat/message")
+@router.post("/message")  # ✅ БЕЗ /chat/ префикса
 async def send_message(
-    message: str = Form(...),
-    conversation_id: int = Form(...),
-    access_token: Optional[str] = Cookie(None),
-    db: Session = Depends(get_db),
-    
+    message_data: MessageRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
-    if not access_token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    
     try:
-        token = access_token.replace("Bearer ", "")
-        user = await get_current_user(token=token, db=db)
-        
-        conversation = db.query(Conversation).filter(Conversation.id == conversation_id, Conversation.user_id == user.id).first()
-        if not conversation:
-            raise HTTPException(status_code=404, detail="Conversation not found")
+        print(f"Sending message for user: {current_user.username}")
+        # If no conversation_id provided, create a new conversation
+        if not message_data.conversation_id:
+            # Create new conversation
+            result = await dify_service.create_new_conversation("New Chat", current_user.username)
+            
+            conversation = Conversation(
+                dify_conversation_id=result["conversation_id"],
+                name="New Chat",
+                user_id=current_user.id
+            )
+            
+            db.add(conversation)
+            db.commit()
+            db.refresh(conversation)
+        else:
+            conversation = db.query(Conversation).filter(
+                Conversation.id == message_data.conversation_id, 
+                Conversation.user_id == current_user.id
+            ).first()
+            if not conversation:
+                raise HTTPException(status_code=404, detail="Conversation not found")
         
         result = await dify_service.send_message(
-            query=message,
-            user_id=user.username,
+            query=message_data.message,
+            user_id=current_user.username,
             conversation_id=conversation.dify_conversation_id
         )
         
         new_message = Message(
             dify_message_id=result["message_id"],
             conversation_id=conversation.id,
-            query=message,
+            query=message_data.message,
             answer=result["answer"]
         )
         
         db.add(new_message)
         
-        conversation.updated_at = new_message.created_at
-        if conversation.name == "New Chat" and len(message) < 30:
-            conversation.name = message
+        # Fix: Handle None updated_at
+        if new_message.created_at:
+            conversation.updated_at = new_message.created_at
+        else:
+            conversation.updated_at = datetime.datetime.utcnow()
+            
+        if conversation.name == "New Chat" and len(message_data.message) < 30:
+            conversation.name = message_data.message
         
         db.commit()
         
         return {
             "message_id": new_message.id,
+            "conversation_id": conversation.id,
             "answer": result["answer"],
-            "created_at": new_message.created_at.isoformat()
+            "created_at": safe_isoformat(new_message.created_at),
+            "conversation_name": conversation.name
         }
     except Exception as e:
+        print(f"Error sending message: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
         
-@router.get("/api/chat/conversations")
+@router.get("/conversations")  # ✅ БЕЗ /chat/ префикса
 async def get_conversations(
-    access_token: Optional[str] = Cookie(None),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    if not access_token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    
     try:
-        token = access_token.replace("Bearer ", "")
-        user = await get_current_user(token=token, db=db)
-        
+        print(f"Loading conversations for user: {current_user.username}")
         conversations = db.query(Conversation).filter(
-            Conversation.user_id == user.id
-        ).order_by(Conversation.updated_at.desc()).all()
+            Conversation.user_id == current_user.id
+        ).order_by(Conversation.updated_at.desc().nulls_last()).all()
         
         result = []
         for conversation in conversations:
+            # Fix: Handle None datetime values
             result.append({
                 "id": conversation.id,
                 "name": conversation.name,
-                "created_at": conversation.created_at.isoformat(),
-                "updated_at": conversation.updated_at.isoformat()
+                "created_at": safe_isoformat(conversation.created_at),
+                "updated_at": safe_isoformat(conversation.updated_at)
             })
         
+        print(f"Found {len(result)} conversations")
         return result
     except Exception as e:
+        print(f"Error loading conversations: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/api/chat/history/{conversation_id}")
+@router.get("/history/{conversation_id}")  # ✅ БЕЗ /chat/ префикса
 async def get_chat_history(
     conversation_id: int,
-    access_token: Optional[str] = Cookie(None),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    if not access_token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    
     try:
-        token = access_token.replace("Bearer ", "")
-        user = await get_current_user(token=token, db=db)
-        
+        print(f"Loading history for conversation {conversation_id}, user: {current_user.username}")
         conversation = db.query(Conversation).filter(
             Conversation.id == conversation_id, 
-            Conversation.user_id == user.id
+            Conversation.user_id == current_user.id
         ).first()
         
         if not conversation:
@@ -176,76 +176,81 @@ async def get_chat_history(
                 "id": message.id,
                 "query": message.query,
                 "answer": message.answer,
-                "created_at": message.created_at.isoformat()
+                "created_at": safe_isoformat(message.created_at)
             })
         
-        return result
+        print(f"Found {len(result)} messages")
+        return {
+            "conversation": {
+                "id": conversation.id,
+                "name": conversation.name,
+                "created_at": safe_isoformat(conversation.created_at),
+                "updated_at": safe_isoformat(conversation.updated_at)
+            },
+            "messages": result
+        }
     except Exception as e:
+        print(f"Error loading history: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/api/chat/delete/{conversation_id}")
+@router.delete("/conversations/{conversation_id}")
 async def delete_conversation(
     conversation_id: int,
-    access_token: Optional[str] = Cookie(None),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)   
 ):
-    if not access_token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    
     try:
-        token = access_token.replace("Bearer ", "")
-        user = await get_current_user(token=token, db=db)
-        
         conversation = db.query(Conversation).filter(
             Conversation.id == conversation_id, 
-            Conversation.user_id == user.id
+            Conversation.user_id == current_user.id
         ).first()
         
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
         
-        
+        # Delete messages first
         db.query(Message).filter(Message.conversation_id == conversation.id).delete()
         
+        # Delete conversation
         db.delete(conversation)
         db.commit()
         
-        return {"success": True}
+        return {"success": True, "message": "Conversation deleted successfully"}
     except Exception as e:
-        print(str(e))
+        print(f"Error deleting conversation: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
-@router.post("/api/chat/rename/{conversation_id}")
+@router.put("/conversations/{conversation_id}")  # ✅ БЕЗ /chat/ префикса
 async def rename_conversation(
     conversation_id: int,
-    name: str = Form(...),
-    access_token: Optional[str] = Cookie(None),
+    rename_data: RenameConversationRequest,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    if not access_token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    
     try:
-        token = access_token.replace("Bearer ", "")
-        user = await get_current_user(token=token, db=db)
-        
         conversation = db.query(Conversation).filter(
             Conversation.id == conversation_id, 
-            Conversation.user_id == user.id
+            Conversation.user_id == current_user.id
         ).first()
         
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
         
-        await dify_service.rename_conversation(conversation.dify_conversation_id, user.username, name)
+        await dify_service.rename_conversation(
+            conversation.dify_conversation_id, 
+            current_user.username, 
+            rename_data.name
+        )
         
-        conversation.name = name
+        conversation.name = rename_data.name
         db.commit()
         
-        return {"success": True, "name": name}
+        return {
+            "success": True, 
+            "id": conversation.id,
+            "name": conversation.name,
+            "updated_at": safe_isoformat(conversation.updated_at)
+        }
     except Exception as e:
+        print(f"Error renaming conversation: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-    
-    
-    

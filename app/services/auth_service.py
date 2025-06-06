@@ -205,7 +205,7 @@ def send_verification_email(verification_code: str, email: str):
 
 def send_password_reset_email(reset_token: str, email: str):
     """Send password reset email"""
-    reset_link = f"http://localhost:8000/reset-password?token={reset_token}"
+    reset_link = f"http://localhost:5173/reset-password?token={reset_token}"
     
     subject = "Password Reset Request"
     
